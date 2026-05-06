@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# pbtrace: pretty-print a Pandorabots talk-trace JSON response.
+#
+# Reads a JSON object from stdin (the body returned by POST /talk
+# with `trace=true`) and prints a hierarchical, ANSI-colored summary.
+# Colors are auto-disabled when NO_COLOR is set or stdout is not a TTY.
+
+set -u
+
+VERSION="0.9.0"
+
+usage() {
+  cat <<'EOF'
+Usage: pbtrace [--color | --no-color] < trace.json
+
+Reads a Pandorabots talk-trace JSON object from stdin and prints a
+hierarchical summary. Designed to be piped from pbtalk.
+
+Options:
+  --color       Force ANSI color output even when stdout is not a TTY.
+  --no-color    Disable ANSI color output (also honors NO_COLOR env var).
+  --version     Print version and exit.
+  -h, --help    Show this help.
+EOF
+}
+
+force_no_color=0
+force_color=0
+while (( $# > 0 )); do
+  case "$1" in
+    --no-color) force_no_color=1; shift ;;
+    --color)    force_color=1;    shift ;;
+    --version|-V) printf 'pbtrace %s\n' "$VERSION"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Error: unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq is required but not found in PATH." >&2
+  exit 2
+fi
+
+if (( force_no_color == 1 )) || [[ -n "${NO_COLOR:-}" ]]; then
+  COLOR=0
+elif (( force_color == 1 )); then
+  COLOR=1
+elif [[ ! -t 1 ]]; then
+  COLOR=0
+else
+  COLOR=1
+fi
+
+buf="$(cat)"
+
+if [[ -z "$buf" ]]; then
+  echo "Error: empty input." >&2
+  exit 2
+fi
+
+if ! printf '%s' "$buf" | jq empty 2>/dev/null; then
+  echo "Error: input is not valid JSON." >&2
+  exit 2
+fi
+
+printf '%s' "$buf" | jq -r --arg color "$COLOR" '
+  def esc(c): if $color == "1" then c else "" end;
+  def bold:    esc("[1m");
+  def reset:   esc("[0m");
+  def gray:    esc("[90m");
+  def cyan:    esc("[36m");
+  def yellow:  esc("[33m");
+  def magenta: esc("[35m");
+
+  # Color per step type (real Pandorabots schema has 7 step types:
+  # begin, match, end, srai-begin, srai-end, sraix-begin, sraix-end).
+  def color_for(t):
+    if   t == "match"        then cyan
+    elif t == "srai-begin"   then yellow
+    elif t == "srai-end"     then yellow
+    elif t == "sraix-begin"  then magenta
+    elif t == "sraix-end"    then magenta
+    elif t == "end"          then gray
+    elif t == "begin"        then gray
+    else "" end;
+
+  # Repeat a string n times (jq 1.4 compatible: avoids `str * n`).
+  def repeat_str(s; n):
+    if n <= 0 then ""
+    else s + repeat_str(s; n - 1)
+    end;
+
+  # Strip surrounding <template>...</template> tags if present.
+  # jq 1.4 lacks sub/gsub, so use ltrimstr/rtrimstr.
+  def strip_template_tags(t):
+    if t == null then null
+    else (t | tostring | ltrimstr("<template>") | rtrimstr("</template>"))
+    end;
+
+  # Filter out the whitespace-only entries the server emits in result arrays.
+  def clean_result(arr):
+    if arr == null or (arr | type) != "array" then arr
+    else (arr | map(select(. != null and . != "" and . != " " and . != "\n")))
+    end;
+
+  def field_line(prefix; label; v):
+    if v == null or v == "" then []
+    else ["\(prefix)    \(label): \(v | tostring)"]
+    end;
+
+  def array_field_line(prefix; label; arr):
+    if arr == null or (arr | type) != "array" or (arr | length) == 0 then []
+    else ["\(prefix)    \(label): \(arr | join(" "))"]
+    end;
+
+  def step_lines(s):
+    (s.type // "step")  as $t
+    | (s.level // 0)    as $lvl
+    | repeat_str("  "; $lvl) as $indent
+    | (if $lvl > 0 then " level=\($lvl)" else "" end) as $lvltag
+    | ["\($indent)\(color_for($t))▸ \($t)\($lvltag)\(reset)"]
+      + array_field_line($indent; "input";    s.input)
+      + array_field_line($indent; "matched";  s.matched)
+      + field_line($indent;       "bot";      s.bot)
+      + field_line($indent;       "template"; strip_template_tags(s.template))
+      + field_line($indent;       "filename"; s.filename)
+      + field_line($indent;       "status";   s.status)
+      + array_field_line($indent; "result";   clean_result(s.result));
+
+  def trace_count:
+    (.trace // null) as $t
+    | if   $t == null              then 0
+      elif ($t | type) == "array"  then ($t | length)
+      else 1 end;
+
+  def steps_lines:
+    (.trace // null) as $t
+    | if   $t == null                                                  then []
+      elif (($t | type) == "array") and (($t | length) == 0)           then []
+      elif ($t | type) == "array"                                      then ($t | map(step_lines(.)) | add)
+      else step_lines($t) end;
+
+  def header_line:
+    "\(bold)[trace]\(reset)"
+    + " sessionid=\(.sessionid // "-")"
+    + " status=\(.status // "-")"
+    + (if (.elapsed // null) != null then " elapsed=\(.elapsed)ms" else "" end);
+
+  def empty_body:
+    "\(gray)(no trace data)\(reset)";
+
+  def summary_line:
+    "\(gray)— steps=\(trace_count) responses=\((.responses // []) | length)\(reset)";
+
+  (
+    [header_line]
+    + (if (steps_lines | length) == 0 then [empty_body] else steps_lines end)
+    + [summary_line]
+  ) | join("\n")
+'

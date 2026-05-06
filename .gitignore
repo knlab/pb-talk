@@ -1,0 +1,21 @@
+# Local credentials
+.env
+.env.*
+!examples/env.example
+
+# History output produced by `historyf`
+history.txt
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Local-only maintainer scripts (not for public distribution)
+tools/
+
+# Test artefacts
+.bats-tmp/

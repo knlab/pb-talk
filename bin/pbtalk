@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+# pbtalk: shell-based REPL for the Pandorabots public API.
+
+set -u
+
+VERSION="0.9.0"
+
+# -------- Configuration loading --------
+
+load_env() {
+  local envfile="${PB_TALK_ENV_FILE:-./.env}"
+  if [[ -f "$envfile" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$envfile"
+    set +a
+  fi
+}
+
+require_var() {
+  # Caller passes (name, value) so the function works under both bash and
+  # zsh without relying on bash's `${!name}` indirect expansion (zsh expands
+  # that differently and would fail at parse time).
+  local name="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]]; then
+    cat >&2 <<EOF
+Error: $name is not set.
+Required: PB_APP_ID, PB_USER_KEY, PB_BOTNAME.
+Define them in a .env file in the current directory, or export them in
+your environment, or point \$PB_TALK_ENV_FILE at an .env elsewhere.
+EOF
+    exit 2
+  fi
+}
+
+# -------- Globals (state) --------
+
+PB_HOST=""
+PB_APP_ID="${PB_APP_ID:-}"
+PB_USER_KEY="${PB_USER_KEY:-}"
+PB_BOTNAME="${PB_BOTNAME:-}"
+PB_BOT_KEY="${PB_BOT_KEY:-}"
+PB_CLIENT_NAME="${PB_CLIENT_NAME:-}"
+PB_SEG_CMD="${PB_SEG_CMD:-}"
+
+sessionid=""
+clientname=""
+topic=""
+trace_on=false
+seg_on=false
+atalk_on=false
+lastinput=""
+history_log=""
+
+# -------- URL builders --------
+
+talk_url() { printf '%s/talk/%s/%s' "$PB_HOST" "$PB_APP_ID" "$PB_BOTNAME"; }
+atalk_url() { printf '%s/atalk' "$PB_HOST"; }
+
+# -------- Request --------
+
+# Populates the global `curl_args` array used by send_talk().
+# Credentials and inputs are placed in the form body, never in the URL,
+# so error messages echoing the URL never leak user_key or botkey.
+build_form() {
+  local input="$1" reset="$2" reload="$3" trace="$4"
+  curl_args=(
+    -sS -X POST
+    -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8'
+    --data-urlencode "input=$input"
+    --data-urlencode "recent=true"
+  )
+  if "$atalk_on"; then
+    curl_args+=( --data-urlencode "botkey=$PB_BOT_KEY" )
+  else
+    curl_args+=( --data-urlencode "user_key=$PB_USER_KEY" )
+  fi
+  if [[ -n "$sessionid" ]]; then
+    curl_args+=( --data-urlencode "sessionid=$sessionid" )
+  fi
+  if [[ -n "$clientname" ]]; then
+    curl_args+=( --data-urlencode "client_name=$clientname" )
+  fi
+  if [[ -n "$topic" ]]; then
+    curl_args+=( --data-urlencode "topic=$topic" )
+  fi
+  if [[ "$reset" == true ]]; then
+    curl_args+=( --data-urlencode "reset=true" )
+  fi
+  if [[ "$reload" == true ]]; then
+    curl_args+=( --data-urlencode "reload=true" )
+  fi
+  if [[ "$trace" == true ]]; then
+    curl_args+=( --data-urlencode "trace=true" )
+  fi
+}
+
+apply_segmentation() {
+  local input="$1"
+  if ! "$seg_on"; then
+    printf '%s' "$input"
+    return 0
+  fi
+  local out
+  if out="$("$PB_SEG_CMD" "$input" 2>/dev/null)"; then
+    printf '%s' "$out"
+  else
+    echo "Warning: $PB_SEG_CMD failed; sending raw input." >&2
+    printf '%s' "$input"
+  fi
+}
+
+send_talk() {
+  local raw="$1" reset="$2" reload="$3" trace="$4"
+  local url
+  if "$atalk_on"; then
+    url="$(atalk_url)"
+  else
+    url="$(talk_url)"
+  fi
+
+  local segged
+  segged="$(apply_segmentation "$raw")"
+
+  local curl_args
+  build_form "$segged" "$reset" "$reload" "$trace"
+
+  local buf
+  if ! buf="$(curl "${curl_args[@]}" "$url")"; then
+    echo "Error: request to $url failed." >&2
+    return 1
+  fi
+
+  local status
+  status="$(printf '%s' "$buf" | jq -r '.status // empty' 2>/dev/null)"
+  if [[ "$status" != "ok" ]]; then
+    local msg
+    msg="$(printf '%s' "$buf" | jq -r '.message // empty' 2>/dev/null)"
+    if [[ -z "$msg" ]]; then
+      msg="$buf"
+    fi
+    echo "Server: $msg" >&2
+    return 1
+  fi
+
+  local new_sid
+  new_sid="$(printf '%s' "$buf" | jq -r '.sessionid // empty')"
+  if [[ -n "$new_sid" ]]; then
+    sessionid="$new_sid"
+  fi
+
+  if "$atalk_on" && [[ -z "$clientname" ]]; then
+    local new_cn
+    new_cn="$(printf '%s' "$buf" | jq -r '.client_name // empty')"
+    if [[ -n "$new_cn" ]]; then
+      clientname="$new_cn"
+    fi
+  fi
+
+  printf '%s' "$buf" | jq -r --arg name "$PB_BOTNAME" '.responses[]? | "\($name)> \(.)"'
+
+  if [[ "$trace" == true ]]; then
+    if command -v pbtrace >/dev/null 2>&1; then
+      printf '%s' "$buf" | pbtrace
+    elif [[ -x "$(dirname "$0")/pbtrace" ]]; then
+      printf '%s' "$buf" | "$(dirname "$0")/pbtrace"
+    else
+      echo "Warning: pbtrace not found in PATH; trace JSON not formatted." >&2
+    fi
+  fi
+}
+
+enter_atalk() {
+  if [[ -z "$PB_BOT_KEY" ]]; then
+    echo "Error: PB_BOT_KEY is not set; --atalk requires a bot key." >&2
+    return 1
+  fi
+  if ! "$atalk_on"; then
+    atalk_on=true
+    sessionid=""
+    clientname=""
+    echo "Switched to atalk mode (POST /atalk with botkey)."
+  fi
+  return 0
+}
+
+# -------- Help --------
+
+print_help() {
+  cat <<'EOF'
+Help:
+  <input>                  Talk to the bot.
+  --trace <input>          Talk once with trace=true; pretty-print the trace.
+  --reset <input>          Talk once with reset=true.
+  --reload <input>         Talk once with reload=true.
+  --reset --trace <input>  Combine reset and trace. (--trace --reset also works.)
+  --atalk <input>          Switch to atalk mode (POST /atalk with botkey)
+                           and talk. Requires PB_BOT_KEY in your .env.
+  atalkoff                 Leave atalk mode and return to /talk.
+  topic                    Prompt for a topic value, sent as the `topic`
+                           parameter on every following talk request.
+                           Empty value clears it.
+  traceon                  Enable trace=true on every following talk.
+  traceoff                 Disable always-on trace mode.
+  seg                      Enable word segmentation. pbtalk pipes input
+                           through $PB_SEG_CMD (default: pbseg) before
+                           sending. Optional; intended for languages that
+                           require explicit segmentation (e.g., Japanese).
+  noseg                    Disable word segmentation (default).
+  history                  Print the local input history.
+  historyc                 Clear the local input history.
+  historyf                 Append the input history to history.txt.
+  retype                   Re-send the previous input.
+  resession                Clear the saved sessionid.
+  clear                    Clear the screen.
+  q                        Quit.
+  h                        Show this help.
+EOF
+}
+
+prompt_marker() {
+  local m=""
+  "$atalk_on" && m+=":at"
+  "$trace_on" && m+=":tr"
+  "$seg_on"   && m+=":seg"
+  printf '%s' "$m"
+}
+
+# -------- REPL --------
+
+trace_flag_for_default() {
+  if "$trace_on"; then echo true; else echo false; fi
+}
+
+main_loop() {
+  printf '(h for help)\n'
+  local input arg trace_default
+  while true; do
+    printf 'Human%s> ' "$(prompt_marker)"
+    if ! IFS= read -r input; then
+      printf '\n'
+      break
+    fi
+    # When stdin is not a terminal (scripted / piped runs), the terminal does
+    # not echo the typed input. Echo it ourselves so the transcript reads as
+    # "Human> hello\nresponse" instead of an undecipherable stream of prompts.
+    [[ -t 0 ]] || printf '%s\n' "$input"
+    trace_default="$(trace_flag_for_default)"
+    case "$input" in
+      'q')
+        echo 'done.'
+        break
+        ;;
+      'h')
+        print_help
+        ;;
+      'clear')
+        clear
+        ;;
+      'history')
+        printf '%s' "$history_log"
+        ;;
+      'historyc')
+        history_log=""
+        echo 'History cleared.'
+        ;;
+      'historyf')
+        printf '%s' "$history_log" >> history.txt
+        history_log=""
+        echo 'History appended to history.txt.'
+        ;;
+      'resession')
+        sessionid=""
+        echo 'sessionid cleared.'
+        ;;
+      'traceon')
+        trace_on=true
+        echo 'Trace mode enabled.'
+        ;;
+      'traceoff')
+        trace_on=false
+        echo 'Trace mode disabled.'
+        ;;
+      'seg')
+        if command -v "$PB_SEG_CMD" >/dev/null 2>&1; then
+          seg_on=true
+          echo "Segmentation enabled (using $PB_SEG_CMD)."
+        else
+          seg_on=false
+          echo "Warning: $PB_SEG_CMD not found in PATH. Segmentation stays off." >&2
+        fi
+        ;;
+      'noseg')
+        seg_on=false
+        echo 'Segmentation disabled.'
+        ;;
+      'atalkoff')
+        if "$atalk_on"; then
+          atalk_on=false
+          clientname="$PB_CLIENT_NAME"
+          sessionid=""
+          echo 'Returned to /talk endpoint.'
+        fi
+        ;;
+      'topic')
+        printf 'topic value (empty to clear)> '
+        if ! IFS= read -r topic; then
+          topic=""
+        fi
+        [[ -t 0 ]] || printf '%s\n' "$topic"
+        if [[ -n "$topic" ]]; then
+          echo 'Topic set.'
+        else
+          echo 'Topic cleared.'
+        fi
+        ;;
+      'retype')
+        if [[ -n "$lastinput" ]]; then
+          printf 'Retype> %s\n' "$lastinput"
+          send_talk "$lastinput" false false "$trace_default" || true
+        fi
+        ;;
+      # Reject bare flag forms (no following input) before the with-space
+      # patterns below — otherwise `--reset --trace` (no trailing space)
+      # would slip into the `'--reset '*` branch and send "--trace" as the
+      # talk input.
+      '--reset' | '--trace' | '--reload' | '--atalk' | '--reset --trace' | '--trace --reset')
+        echo "Error: $input requires an input string." >&2
+        ;;
+      '--reset --trace '*)
+        arg="${input#--reset --trace }"
+        send_talk "$arg" true false true || true
+        lastinput="$arg"
+        history_log+="$arg"$'\n'
+        ;;
+      '--trace --reset '*)
+        arg="${input#--trace --reset }"
+        send_talk "$arg" true false true || true
+        lastinput="$arg"
+        history_log+="$arg"$'\n'
+        ;;
+      '--reset '*)
+        arg="${input#--reset }"
+        send_talk "$arg" true false "$trace_default" || true
+        lastinput="$arg"
+        history_log+="$arg"$'\n'
+        ;;
+      '--trace '*)
+        arg="${input#--trace }"
+        send_talk "$arg" false false true || true
+        lastinput="$arg"
+        history_log+="$arg"$'\n'
+        ;;
+      '--reload '*)
+        arg="${input#--reload }"
+        send_talk "$arg" false true "$trace_default" || true
+        lastinput="$arg"
+        history_log+="$arg"$'\n'
+        ;;
+      '--atalk '*)
+        arg="${input#--atalk }"
+        if enter_atalk; then
+          send_talk "$arg" false false "$trace_default" || true
+          lastinput="$arg"
+          history_log+="$arg"$'\n'
+        fi
+        ;;
+      '')
+        ;;
+      *)
+        send_talk "$input" false false "$trace_default" || true
+        lastinput="$input"
+        history_log+="$input"$'\n'
+        ;;
+    esac
+  done
+}
+
+# -------- Entrypoint --------
+
+main() {
+  case "${1:-}" in
+    --version|-V)
+      printf 'pbtalk %s\n' "$VERSION"
+      exit 0
+      ;;
+    --help|-h)
+      print_help
+      exit 0
+      ;;
+    '')
+      ;;
+    *)
+      echo "Error: unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+
+  load_env
+
+  require_var PB_APP_ID   "${PB_APP_ID:-}"
+  require_var PB_USER_KEY "${PB_USER_KEY:-}"
+  require_var PB_BOTNAME  "${PB_BOTNAME:-}"
+
+  PB_HOST="${PB_HOST:-https://api.pandorabots.com}"
+  PB_HOST="${PB_HOST%/}"
+  PB_SEG_CMD="${PB_SEG_CMD:-pbseg}"
+  clientname="$PB_CLIENT_NAME"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required but not found in PATH." >&2
+    exit 2
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Error: curl is required but not found in PATH." >&2
+    exit 2
+  fi
+
+  main_loop
+}
+
+main "$@"

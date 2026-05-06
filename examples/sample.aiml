@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal sample AIML for first-time pb-talk users.
+
+  Note: this file intentionally defines only a single HELLO category.
+  Pandorabots ships a system-managed wildcard ("*") category that the
+  server applies as the fallback for any input that does not match a
+  user pattern. That fallback is built in and cannot be replaced via
+  the public API, so adding "*" here would be redundant.
+-->
+<aiml version="2.0">
+  <category>
+    <pattern>HELLO</pattern>
+    <template>Hello, world.</template>
+  </category>
+</aiml>
