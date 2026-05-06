@@ -103,14 +103,15 @@ printf '%s' "$buf" | jq -r --arg color "$COLOR" '
     else (arr | map(select(. != null and . != "" and . != " " and . != "\n")))
     end;
 
-  def field_line(prefix; label; v):
+  # Note: `label` is a reserved keyword in jq 1.6+, so we use `lbl` here.
+  def field_line(prefix; lbl; v):
     if v == null or v == "" then []
-    else ["\(prefix)    \(label): \(v | tostring)"]
+    else ["\(prefix)    \(lbl): \(v | tostring)"]
     end;
 
-  def array_field_line(prefix; label; arr):
+  def array_field_line(prefix; lbl; arr):
     if arr == null or (arr | type) != "array" or (arr | length) == 0 then []
-    else ["\(prefix)    \(label): \(arr | join(" "))"]
+    else ["\(prefix)    \(lbl): \(arr | join(" "))"]
     end;
 
   def step_lines(s):
