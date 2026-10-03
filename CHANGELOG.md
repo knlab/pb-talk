@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 - Unit tests now exercise the talk path through a fake `curl` on `PATH`, so request shape, `.env` parsing and output sanitization are covered without credentials or network access.
 - `tests/unit/helpers.bash` with `assert_contains` / `assert_not_contains` / `assert_starts_with`. All unit-test assertions now use them: under bash 3.2 (macOS default) a failing `[[ ... ]]` does not abort a `set -e` test, so the previous `[[ "$output" =~ ... ]]` assertions were only effective when they happened to be the last line of a test.
+- `README.ja.md`: new section on how `.env` is parsed (format, no shell expansion, unknown keys ignored, values not exported to child processes) and on output sanitization; the segmentation-hook spec notes that the hook no longer receives `.env` values in its environment.
 
 ## [0.9.0] — 2026-05-05
 
