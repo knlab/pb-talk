@@ -64,6 +64,22 @@ if ! printf '%s' "$buf" | jq empty 2>/dev/null; then
 fi
 
 printf '%s' "$buf" | jq -r --arg color "$COLOR" '
+  # Drop C0 and C1 control characters and DEL (keeping TAB and LF) from
+  # every string in the response before rendering. Trace fields come from
+  # the bot author and from sraix upstreams; an unsanitized ESC sequence
+  # could retitle the terminal, write the clipboard, clear the screen, etc.
+  # Written for jq 1.4 (no gsub, no walk).
+  def sanitize_str:
+    explode
+    | map(select(. == 9 or . == 10
+                 or (. >= 32 and . != 127 and (. < 128 or . > 159))))
+    | implode;
+  def sanitize_all:
+    if   type == "string" then sanitize_str
+    elif type == "array"  then map(sanitize_all)
+    elif type == "object" then with_entries(.value |= sanitize_all)
+    else . end;
+
   def esc(c): if $color == "1" then c else "" end;
   def bold:    esc("[1m");
   def reset:   esc("[0m");
@@ -153,7 +169,8 @@ printf '%s' "$buf" | jq -r --arg color "$COLOR" '
   def summary_line:
     "\(gray)— steps=\(trace_count) responses=\((.responses // []) | length)\(reset)";
 
-  (
+  sanitize_all
+  | (
     [header_line]
     + (if (steps_lines | length) == 0 then [empty_body] else steps_lines end)
     + [summary_line]

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+- `.env` is now parsed line by line instead of being sourced as shell code. Previously, starting `pbtalk` in a directory containing a crafted `.env` (e.g. a cloned bot repository) executed whatever it contained. Supported syntax: `KEY=VALUE`, optional `export` prefix, `#` comments (full-line and after an unquoted value), single or double quotes around a value. No shell expansion is performed.
+- Bot replies, server error messages, non-JSON server bodies and every string in `pbtrace` output are stripped of terminal control characters (C0, C1, DEL; TAB and LF are kept). A bot template or an `sraix` upstream can no longer inject escape sequences (terminal title, OSC 52 clipboard, screen clearing) into the terminal. `Server:` error lines are printed with `printf` rather than `echo`, which under zsh also interpreted backslash escapes.
+
+### Changed
+- `.env` values are no longer exported to child processes (`curl`, `jq`, `pbtrace`, the segmentation hook). Keys other than the documented `PB_*` ones are ignored with a warning instead of being set.
+- `curl` is invoked with `--globoff`, so `[` `]` `{` `}` in `PB_APP_ID` / `PB_BOTNAME` are no longer expanded into multiple requests.
+
+### Fixed
+- Under zsh, every talk request failed with `read-only variable: status` because `send_talk` declared a local named `status`, which zsh reserves. Renamed.
+
+### Added
+- Unit tests now exercise the talk path through a fake `curl` on `PATH`, so request shape, `.env` parsing and output sanitization are covered without credentials or network access.
+- `tests/unit/helpers.bash` with `assert_contains` / `assert_not_contains` / `assert_starts_with`. All unit-test assertions now use them: under bash 3.2 (macOS default) a failing `[[ ... ]]` does not abort a `set -e` test, so the previous `[[ "$output" =~ ... ]]` assertions were only effective when they happened to be the last line of a test.
+
 ## [0.9.0] — 2026-05-05
 
 Initial public beta release. The CLI surface and configuration variables are expected to be stable through the 0.9.x line. The 1.0.0 promotion will follow once external feedback has been incorporated.

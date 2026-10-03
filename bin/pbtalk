@@ -7,14 +7,87 @@ VERSION="0.9.0"
 
 # -------- Configuration loading --------
 
+# The .env file is parsed line by line, never sourced. Sourcing would run
+# arbitrary shell code from whatever directory pbtalk happens to be started
+# in (e.g. a cloned bot repository that ships its own .env). Only the keys
+# pbtalk knows about are accepted, and nothing is exported, so credentials
+# do not leak into the environment of curl, jq, or the segmentation hook.
+#
+# Accepted syntax:
+#   KEY=VALUE            optional leading `export `; whitespace around
+#                        the key and value is trimmed
+#   # comment            whole-line comments and blank lines are skipped
+#   KEY=VALUE # comment  a trailing comment after an unquoted value
+#   KEY="VALUE"          a value starting with a quote runs to the matching
+#   KEY='VALUE'          closing quote; nothing inside is interpreted and
+#                        anything after the closing quote is ignored
+# No shell expansion of any kind ($VAR, backslashes, command substitution)
+# takes place.
+
+# Assigns a known PB_* variable. Returns 1 for a key pbtalk does not know.
+set_env_var() {
+  local key="$1" value="$2"
+  case "$key" in
+    PB_APP_ID)      PB_APP_ID="$value" ;;
+    PB_USER_KEY)    PB_USER_KEY="$value" ;;
+    PB_BOTNAME)     PB_BOTNAME="$value" ;;
+    PB_HOST)        PB_HOST="$value" ;;
+    PB_BOT_KEY)     PB_BOT_KEY="$value" ;;
+    PB_CLIENT_NAME) PB_CLIENT_NAME="$value" ;;
+    PB_SEG_CMD)     PB_SEG_CMD="$value" ;;
+    *) return 1 ;;
+  esac
+}
+
 load_env() {
   local envfile="${PB_TALK_ENV_FILE:-./.env}"
-  if [[ -f "$envfile" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    . "$envfile"
-    set +a
-  fi
+  [[ -f "$envfile" ]] || return 0
+
+  local line key value lineno=0
+  # `|| [[ -n "$line" ]]` keeps a final line that lacks a trailing newline.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"                      # tolerate CRLF files
+    line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
+    case "$line" in
+      '' | '#'*) continue ;;
+      'export '*)
+        line="${line#export }"
+        line="${line#"${line%%[![:space:]]*}"}"
+        ;;
+    esac
+    case "$line" in
+      *=*) ;;
+      *)
+        printf 'Warning: %s:%s: not a KEY=VALUE line; ignored.\n' \
+          "$envfile" "$lineno" >&2
+        continue
+        ;;
+    esac
+
+    key="${line%%=*}"
+    key="${key%"${key##*[![:space:]]}"}"      # trim trailing whitespace
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    case "$value" in
+      \"*)
+        value="${value#\"}"
+        value="${value%%\"*}"
+        ;;
+      \'*)
+        value="${value#\'}"
+        value="${value%%\'*}"
+        ;;
+      *)
+        value="${value%%[[:space:]]#*}"       # strip trailing comment
+        value="${value%"${value##*[![:space:]]}"}"
+        ;;
+    esac
+    if ! set_env_var "$key" "$value"; then
+      printf 'Warning: %s:%s: ignoring unknown key "%s".\n' \
+        "$envfile" "$lineno" "$key" >&2
+    fi
+  done < "$envfile"
 }
 
 require_var() {
@@ -58,6 +131,30 @@ history_log=""
 talk_url() { printf '%s/talk/%s/%s' "$PB_HOST" "$PB_APP_ID" "$PB_BOTNAME"; }
 atalk_url() { printf '%s/atalk' "$PB_HOST"; }
 
+# -------- Output sanitization --------
+
+# Server-supplied text (bot replies, error messages, trace fields) is written
+# straight to the terminal. Anyone who can author the bot's AIML, or any
+# sraix upstream, could otherwise embed escape sequences that retitle the
+# terminal, write to the clipboard (OSC 52), clear the screen, and so on.
+#
+# JQ_SANITIZE defines `sanitize`, which drops C0 and C1 control characters
+# and DEL from a string while keeping TAB and LF. Non-strings pass through.
+# Written for jq 1.4 (no gsub).
+JQ_SANITIZE='
+  def sanitize:
+    if type == "string" then
+      explode
+      | map(select(. == 9 or . == 10
+                   or (. >= 32 and . != 127 and (. < 128 or . > 159))))
+      | implode
+    else . end;
+'
+
+# Byte-level fallback for text that is not JSON (e.g. an HTML error page):
+# drop C0 controls except TAB and LF, and DEL.
+strip_ctrl() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
+
 # -------- Request --------
 
 # Populates the global `curl_args` array used by send_talk().
@@ -65,8 +162,10 @@ atalk_url() { printf '%s/atalk' "$PB_HOST"; }
 # so error messages echoing the URL never leak user_key or botkey.
 build_form() {
   local input="$1" reset="$2" reload="$3" trace="$4"
+  # --globoff: curl would otherwise expand `[...]` / `{...}` in the URL
+  # (built from PB_APP_ID / PB_BOTNAME) into multiple requests.
   curl_args=(
-    -sS -X POST
+    -sS --globoff -X POST
     -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8'
     --data-urlencode "input=$input"
     --data-urlencode "recent=true"
@@ -132,15 +231,16 @@ send_talk() {
     return 1
   fi
 
-  local status
-  status="$(printf '%s' "$buf" | jq -r '.status // empty' 2>/dev/null)"
-  if [[ "$status" != "ok" ]]; then
+  local resp_status
+  resp_status="$(printf '%s' "$buf" | jq -r '.status // empty' 2>/dev/null)"
+  if [[ "$resp_status" != "ok" ]]; then
     local msg
-    msg="$(printf '%s' "$buf" | jq -r '.message // empty' 2>/dev/null)"
+    msg="$(printf '%s' "$buf" | jq -r "$JQ_SANITIZE"'.message // empty | sanitize' 2>/dev/null)"
     if [[ -z "$msg" ]]; then
-      msg="$buf"
+      msg="$(printf '%s' "$buf" | strip_ctrl)"
     fi
-    echo "Server: $msg" >&2
+    # printf, not echo: zsh's echo interprets backslash escapes in $msg.
+    printf 'Server: %s\n' "$msg" >&2
     return 1
   fi
 
@@ -158,7 +258,8 @@ send_talk() {
     fi
   fi
 
-  printf '%s' "$buf" | jq -r --arg name "$PB_BOTNAME" '.responses[]? | "\($name)> \(.)"'
+  printf '%s' "$buf" \
+    | jq -r --arg name "$PB_BOTNAME" "$JQ_SANITIZE"'.responses[]? | sanitize | "\($name)> \(.)"'
 
   if [[ "$trace" == true ]]; then
     if command -v pbtrace >/dev/null 2>&1; then

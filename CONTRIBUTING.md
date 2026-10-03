@@ -35,6 +35,10 @@ CI runs the same matrix on macOS and Ubuntu under both `bash` and `zsh`.
 - Dependencies: limit to `curl`, `jq`, and tools shipped by default on macOS and Ubuntu.
 - Language: English everywhere except `README.ja.md`. CI enforces this.
 - Credentials: never let `user_key` or `botkey` reach a URL string that could appear in error output. Use `--data-urlencode` to put them in the request body.
+- Configuration: never `source` a user-supplied file. `.env` goes through `load_env`'s line parser, and new keys are added to the whitelist in `set_env_var`.
+- Server output: anything received from the API must pass through `sanitize` (pbtalk) or `sanitize_all` (pbtrace) before it is printed, and must be printed with `printf '%s'`, not `echo` (zsh's `echo` interprets backslash escapes).
+- Tests: the talk path is tested with the fake `curl` helper in `tests/unit/test_pbtalk_cli.bats`; do not add tests that need real credentials outside `tests/integration/`.
+- Assertions: use `assert_contains` / `assert_not_contains` / `assert_starts_with` from `tests/unit/helpers.bash`, or `[ ... ]`, never `[[ ... ]]`. bash 3.2 (macOS default) does not abort a `set -e` test on a failing `[[`, so such an assertion is only detected when it is the last line of the test.
 - Comments: explain the *why* when it's not obvious from the code. Keep them short.
 
 ## Submitting a change

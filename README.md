@@ -96,7 +96,11 @@ PB_SEG_CMD=pbseg                      # word-segmentation command name
 
 A template lives at [`examples/env.example`](examples/env.example). Copy it to `.env` next to the bot files you are testing.
 
+The file is parsed, never executed, so a `.env` found in an untrusted directory cannot run code. Each line is `KEY=VALUE`, optionally prefixed with `export`. Blank lines and `#` comments are skipped, including a trailing `# comment` after an unquoted value. A value may be wrapped in single or double quotes. No shell expansion takes place: `$VAR`, `$(...)` and backslashes are taken literally. Keys other than the `PB_*` ones above are ignored with a warning. Values stay inside `pbtalk` and are not exported to the processes it runs (`curl`, `jq`, `pbtrace`, the segmentation hook).
+
 Credentials (`user_key`, `botkey`) are sent in the request body, never in the URL query string, so error messages that echo a URL never leak them.
+
+Bot replies, server error messages and trace fields are stripped of terminal control characters (C0, C1 and DEL, keeping TAB and LF) before they are printed, so a bot template or an `sraix` upstream cannot inject escape sequences into your terminal.
 
 ## Command reference (REPL)
 
