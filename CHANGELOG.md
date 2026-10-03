@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-04
+
+Security hardening release. The `.env` file is no longer executed as shell code and its values are no longer exported to child processes; see the Security and Changed entries below before upgrading if your `.env` relied on shell syntax or your segmentation hook read `PB_*` variables from its environment.
+
 ### Security
 - `.env` is now parsed line by line instead of being sourced as shell code. Previously, starting `pbtalk` in a directory containing a crafted `.env` (e.g. a cloned bot repository) executed whatever it contained. Supported syntax: `KEY=VALUE`, optional `export` prefix, `#` comments (full-line and after an unquoted value), single or double quotes around a value. No shell expansion is performed.
 - Bot replies, server error messages, non-JSON server bodies and every string in `pbtrace` output are stripped of terminal control characters (C0, C1, DEL; TAB and LF are kept). A bot template or an `sraix` upstream can no longer inject escape sequences (terminal title, OSC 52 clipboard, screen clearing) into the terminal. `Server:` error lines are printed with `printf` rather than `echo`, which under zsh also interpreted backslash escapes.
