@@ -4,6 +4,31 @@ A shell-based REPL for the [Pandorabots](https://www.pandorabots.com/docs/api-en
 
 > Looking for the Japanese supplement? See [README.ja.md](README.ja.md).
 
+> [!WARNING]
+> **Pandorabots has shut down its developer hosting platform, so pb-talk no
+> longer works.** In 2026 Pandorabots wound down the hosted bot service and the
+> public API (`api.pandorabots.com`) that `pbtalk` talks to; its website now
+> carries a "Hosting Service Sunset" notice. pb-talk is no longer maintained,
+> and 0.10.1 is its final release.
+>
+> Every talk request (`<input>`, `--trace`, `--reset`, `--reload`, `--atalk`)
+> now fails with a connection error. `pbtrace` still formats trace JSON you
+> saved earlier, and the REPL's local commands (`history*`, `topic`, `seg` /
+> `noseg`) still run, but there is no server to talk to.
+>
+> To keep running AIML bots, Pandorabots points to open-source AIML interpreters:
+> [Program AB](https://code.google.com/archive/p/program-ab/) (Java, AIML 2.0
+> reference implementation), [Program-Y](https://github.com/keiffster/program-y)
+> (Python), [aimlinterpreter](https://www.npmjs.com/package/aimlinterpreter)
+> (Node.js), and community projects such as Program O (PHP) listed under
+> [github.com/pandorabots](https://github.com/pandorabots). The AIML
+> specification is at [aiml.foundation](http://www.aiml.foundation/). Customers
+> who missed the migration window can contact <support@pandorabots.com>.
+>
+> The rest of this README describes the tool as it worked while the service was
+> available. The official API documentation used to be at
+> <https://www.pandorabots.com/docs/api-endpoints/>; it is no longer online.
+
 ## Features
 
 - Interactive talk loop against `POST /talk/{app_id}/{botname}` with session continuity.

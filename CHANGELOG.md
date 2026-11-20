@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-21
+
+Final release. Pandorabots has wound down its developer hosting platform,
+so the public API (`api.pandorabots.com`) that `pbtalk` talks to is no
+longer available. This release documents that and marks pb-talk as
+deprecated. No code changes.
+
+### Deprecated
+- pb-talk is deprecated and no longer maintained. README / README.ja
+  open with a notice that says every talk request now fails with a
+  connection error, that `pbtrace` and the REPL's local commands
+  (`history*`, `topic`, `seg` / `noseg`) still run, and points to the
+  open-source AIML interpreters that Pandorabots recommends. The
+  companion project [pb-migrate](https://github.com/knlab/pb-migrate)
+  (0.8.1) was deprecated the same way.
+
 ## [0.10.0] — 2026-10-04
 
 Security hardening release. The `.env` file is no longer executed as shell code and its values are no longer exported to child processes; see the Security and Changed entries below before upgrading if your `.env` relied on shell syntax or your segmentation hook read `PB_*` variables from its environment.

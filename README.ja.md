@@ -2,6 +2,31 @@
 
 > English version: [README.md](README.md).
 
+> [!WARNING]
+> **Pandorabots が開発者向けホスティングを終了したため、pb-talk はもう動作しません。**
+> 2026 年に Pandorabots はホスティング型のボットサービスと、`pbtalk` が使っていた
+> 公開 API (`api.pandorabots.com`) を終了しました。公式サイトには "Hosting Service
+> Sunset" の告知が出ています。pb-talk もメンテナンスを終了し、0.10.1 が最終リリースです。
+>
+> `<input>`、`--trace`、`--reset`、`--reload`、`--atalk` など API を呼ぶ操作は、
+> すべて接続エラーになります。`pbtrace` は保存済みのトレース JSON の整形に引き続き
+> 使えますし、REPL のローカルコマンド（`history*`、`topic`、`seg` / `noseg`）も
+> 動きますが、会話相手となるサーバーはもうありません。
+>
+> AIML ボットを動かし続けるには、Pandorabots が案内しているオープンソースの AIML
+> インタプリタを使ってください:
+> [Program AB](https://code.google.com/archive/p/program-ab/) (Java、AIML 2.0 の
+> リファレンス実装)、[Program-Y](https://github.com/keiffster/program-y) (Python)、
+> [aimlinterpreter](https://www.npmjs.com/package/aimlinterpreter) (Node.js)、
+> [github.com/pandorabots](https://github.com/pandorabots) に挙がっている Program O
+> (PHP) などのコミュニティプロジェクト。AIML の仕様は
+> [aiml.foundation](http://www.aiml.foundation/) にあります。移行期間を逃した利用者は
+> <support@pandorabots.com> に問い合わせできます。
+>
+> 以下の内容は、サービスが提供されていた当時の動作を説明したものです。公式 API
+> ドキュメント (<https://www.pandorabots.com/docs/api-endpoints/>) はすでに
+> 公開終了しています。
+
 `pb-talk` は [Pandorabots](https://www.pandorabots.com/docs/api-endpoints/) の公開APIに対するシェル製の対話REPLです。かつて業務で使っていた手元のシェルツールを、個人OSSとして整備し直したものです。
 
 英語版（[README.md](README.md)）が主ドキュメントです。本ファイルは日本語ユーザー向けの補足、特に分かち書き（テキスト前処理）の連携方法をまとめます。
